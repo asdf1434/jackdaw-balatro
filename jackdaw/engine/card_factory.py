@@ -142,6 +142,9 @@ def create_joker(
         card.set_perishable(True)
     if rental:
         card.set_rental(True)
+    # Card:init calls set_cost, so a joker always has a cost and sell value.
+    # Without this, sell_cost stayed 0 and Swashbuckler read 0 for every joker.
+    card.set_cost()
     return card
 
 

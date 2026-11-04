@@ -642,10 +642,10 @@ def _handle_play_hand(gs: dict[str, Any], indices: tuple[int, ...]) -> dict[str,
     discard_pile.extend(played)
 
     # ------------------------------------------------------------------
-    # 9. Record hand type
+    # 9. Record hand type: score_hand already did (scoring.py, Phase 4).
+    #    Recording it here too counted every play twice, which Supernova
+    #    and Card Sharp read.
     # ------------------------------------------------------------------
-    if hand_levels is not None and result.hand_type != "NULL":
-        hand_levels.record_play(result.hand_type)
 
     # ------------------------------------------------------------------
     # 10. Determine next phase

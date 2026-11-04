@@ -135,7 +135,7 @@ def init_game_object() -> dict[str, Any]:
             },
             "used_packs": [],
             "cards_flipped": 0,
-            "idol_card": {"suit": "Spades", "rank": "Ace"},
+            "idol_card": {"suit": "Spades", "rank": "Ace", "id": 14},
             "mail_card": {"rank": "Ace"},
             "ancient_card": {"suit": "Spades"},
             "castle_card": {"suit": "Spades"},
@@ -377,7 +377,12 @@ def start_round(game_state: dict[str, Any]) -> None:
     cr["hands_left"] = max(1, rr["hands"] + rb["next_hands"])
     cr["discards_left"] = max(0, rr["discards"] + rb["discards"])
 
-    # Round-specific counters
+    # Round-specific counters.  new_round also zeroes every hand type's
+    # played_this_round, which Card Sharp reads; without it Card Sharp fired
+    # on hand types played in earlier rounds.
+    hand_levels = game_state.get("hand_levels")
+    if hand_levels is not None:
+        hand_levels.reset_round_counts()
     cr["hands_played"] = 0
     cr["discards_used"] = 0
     cr["reroll_cost_increase"] = 0
