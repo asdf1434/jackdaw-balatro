@@ -411,7 +411,8 @@ def _legal_round_eval(gs: dict[str, Any]) -> list[Action]:
 
 def _legal_shop(gs: dict[str, Any]) -> list[Action]:
     actions: list[Action] = []
-    dollars: int = gs.get("dollars", 0)
+    # Spendable money: Credit Card lowers bankrupt_at to -20.
+    dollars: int = gs.get("dollars", 0) - gs.get("bankrupt_at", 0)
     jokers: list[Card] = gs.get("jokers", [])
     joker_slots: int = gs.get("joker_slots", 5)
     consumables: list[Card] = gs.get("consumables", [])
@@ -420,7 +421,7 @@ def _legal_shop(gs: dict[str, Any]) -> list[Action]:
     # Buy cards from shop
     shop_cards: list[Card] = gs.get("shop_cards", [])
     for i, card in enumerate(shop_cards):
-        if card.cost > dollars:
+        if card.cost > 0 and card.cost > dollars:
             continue
         # Check slot availability
         card_set = card.ability.get("set", "") if isinstance(card.ability, dict) else ""
@@ -454,14 +455,14 @@ def _legal_shop(gs: dict[str, Any]) -> list[Action]:
     # Open boosters
     shop_boosters: list[Card] = gs.get("shop_boosters", [])
     for i, booster in enumerate(shop_boosters):
-        if booster.cost <= dollars:
+        if booster.cost <= 0 or booster.cost <= dollars:
             actions.append(OpenBooster(card_index=i))
 
     # Reroll
     cr = gs.get("current_round", {})
     reroll_cost = cr.get("reroll_cost", 5)
     free_rerolls = cr.get("free_rerolls", 0)
-    if free_rerolls > 0 or dollars >= reroll_cost:
+    if free_rerolls > 0 or reroll_cost == 0 or dollars >= reroll_cost:
         actions.append(Reroll())
 
     # Next round (always available in shop)

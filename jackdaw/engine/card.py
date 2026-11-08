@@ -765,7 +765,13 @@ class Card:
             amount = extra if isinstance(extra, int) else 0
             game_state["bankrupt_at"] = game_state.get("bankrupt_at", 0) - amount
         if name == "Chaos the Clown":
-            game_state["free_rerolls"] = game_state.get("free_rerolls", 0) + 1
+            # card.lua:601: the free reroll lives on current_round, and the
+            # price is recomputed without an increment.
+            cr = game_state.setdefault("current_round", {})
+            cr["free_rerolls"] = cr.get("free_rerolls", 0) + 1
+            from jackdaw.engine.shop import calculate_reroll_cost
+
+            calculate_reroll_cost(game_state)
         if name == "Turtle Bean" and isinstance(extra, dict):
             game_state["hand_size"] = game_state.get("hand_size", 0) + extra.get("h_size", 0)
         if name == "Oops! All 6s":
@@ -803,7 +809,11 @@ class Card:
             amount = extra if isinstance(extra, int) else 0
             game_state["bankrupt_at"] = game_state.get("bankrupt_at", 0) + amount
         if name == "Chaos the Clown":
-            game_state["free_rerolls"] = max(0, game_state.get("free_rerolls", 0) - 1)
+            cr = game_state.setdefault("current_round", {})
+            cr["free_rerolls"] = cr.get("free_rerolls", 0) - 1
+            from jackdaw.engine.shop import calculate_reroll_cost
+
+            calculate_reroll_cost(game_state)
         if name == "Turtle Bean" and isinstance(extra, dict):
             game_state["hand_size"] = game_state.get("hand_size", 0) - extra.get("h_size", 0)
         if name == "Oops! All 6s":

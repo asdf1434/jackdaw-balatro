@@ -971,6 +971,78 @@ def _handle_cash_out(gs: dict[str, Any]) -> dict[str, Any]:
     return gs
 
 
+def _spendable(gs: dict[str, Any]) -> int:
+    """Dollars available to spend: ``G.GAME.dollars - G.GAME.bankrupt_at``.
+
+    Credit Card lowers ``bankrupt_at`` to -20 (button_callbacks.lua:56).
+    """
+    return gs.get("dollars", 0) - gs.get("bankrupt_at", 0)
+
+
+def _holds(gs: dict[str, Any], key: str) -> bool:
+    return any(getattr(j, "center_key", None) == key for j in gs.get("jokers", []))
+
+
+def _sync_joker_flags(gs: dict[str, Any]) -> None:
+    """Recompute the flags the game reads with ``find_joker`` at use time.
+
+    Showman (``j_ring_master``) lets held jokers appear again; Astronomer
+    makes planets and Celestial packs free, and buying or selling it reprices
+    every card (card.lua:616, 673).
+    """
+    gs["has_showman"] = _holds(gs, "j_ring_master")
+    had = gs.get("has_astronomer", False)
+    gs["has_astronomer"] = _holds(gs, "j_astronomer")
+    if had != gs["has_astronomer"]:
+        ante = gs.get("round_resets", {}).get("ante", 1)
+        for c in list(gs.get("shop_cards", [])) + list(gs.get("shop_boosters", [])):
+            c.set_cost(
+                inflation=gs.get("inflation", 0),
+                discount_percent=gs.get("discount_percent", 0),
+                ante=ante,
+                booster_ante_scaling=gs.get("booster_ante_scaling", False),
+                has_astronomer=gs["has_astronomer"],
+            )
+
+
+def _add_joker(gs: dict[str, Any], card: Any) -> None:
+    """Emplace a joker and apply its passive effects (``Card:add_to_deck``)."""
+    gs.setdefault("jokers", []).append(card)
+    gs.setdefault("used_jokers", {})[card.center_key] = True
+    card.add_to_deck(gs)
+    _sync_joker_flags(gs)
+
+
+def _remove_joker(gs: dict[str, Any], card: Any) -> None:
+    """Remove a joker as ``Card:remove`` does (card.lua:4727).
+
+    Undo its passive effects, and return its key to the pool unless another
+    copy is still held.
+    """
+    jokers = gs.get("jokers", [])
+    if card in jokers:
+        jokers.remove(card)
+    card.remove_from_deck(gs)
+    if not _holds(gs, card.center_key):
+        gs.get("used_jokers", {}).pop(card.center_key, None)
+    _sync_joker_flags(gs)
+
+
+def _copy_joker(card: Any) -> Any:
+    """``copy_card`` (common_events.lua:2156) for a joker without edition.
+
+    The copy keeps the whole ability table, scaling and ``extra_value``
+    included; ``set_edition`` then recomputes its cost from them.
+    """
+    import copy as _copy
+
+    new = _copy.deepcopy(card)
+    new.edition = (
+        None if card.edition and card.edition.get("negative") else _copy.deepcopy(card.edition)
+    )
+    return new
+
+
 def _handle_buy_card(gs: dict[str, Any], idx: int) -> dict[str, Any]:
     """Purchase a card from the shop.
 
@@ -987,7 +1059,7 @@ def _handle_buy_card(gs: dict[str, Any], idx: int) -> dict[str, Any]:
         raise IllegalActionError(f"Invalid shop index {idx}")
 
     card = shop_cards[idx]
-    if card.cost > gs.get("dollars", 0):
+    if card.cost > 0 and card.cost > _spendable(gs):
         raise IllegalActionError("Cannot afford card")
 
     gs["dollars"] -= card.cost
@@ -1000,8 +1072,7 @@ def _handle_buy_card(gs: dict[str, Any], idx: int) -> dict[str, Any]:
     card_set = _get_card_set(card)
     added_playing_card = False
     if card_set == "Joker":
-        gs.setdefault("jokers", []).append(card)
-        gs.setdefault("used_jokers", {})[card.center_key] = True
+        _add_joker(gs, card)
     elif card_set in ("Tarot", "Planet", "Spectral"):
         gs.setdefault("consumables", []).append(card)
     else:
@@ -1035,13 +1106,53 @@ def _handle_sell_card(gs: dict[str, Any], area: str, idx: int) -> dict[str, Any]
     if getattr(card, "eternal", False):
         raise IllegalActionError("Cannot sell eternal card")
 
-    gs["dollars"] = gs.get("dollars", 0) + card.sell_cost
-    cards.pop(idx)
+    # Card:sell_card (card.lua:1590) fires selling_self on the sold card
+    # first, while it is still held: Invisible Joker duplicates here.
+    if area == "jokers":
+        _fire_selling_self(gs, card)
 
-    # Fire selling_card joker context (Campfire +xMult per card sold)
+    gs["dollars"] = gs.get("dollars", 0) + card.sell_cost
+    if area == "jokers":
+        _remove_joker(gs, card)
+    else:
+        cards.pop(idx)
+
+    # G.FUNCS.sell_card fires selling_card on every other joker (Campfire)
     _fire_shop_joker_context(gs, selling_card=True)
 
     return gs
+
+
+def _fire_selling_self(gs: dict[str, Any], card: Any) -> None:
+    """``selling_self`` for one joker; applies Invisible Joker's duplicate.
+
+    card.lua:2370: the copy is a random other joker, made only while the
+    joker area is not over its limit (the sold card still counts).
+    """
+    from jackdaw.engine.jokers import GameSnapshot, JokerContext, calculate_joker
+
+    if getattr(card, "debuff", False):
+        return
+    jokers: list = gs.get("jokers", [])
+    ctx = JokerContext(
+        selling_self=True,
+        jokers=jokers,
+        game=GameSnapshot(joker_count=len(jokers), joker_slots=gs.get("joker_slots", 5),
+                          money=gs.get("dollars", 0)),
+        rng=gs.get("rng"),
+    )
+    result = calculate_joker(card, ctx)
+    if not (result and result.extra and result.extra.get("duplicate_random_joker")):
+        return
+    others = [j for j in jokers if j is not card]
+    if not others or len(jokers) > gs.get("joker_slots", 5):
+        return
+    rng = gs["rng"]
+    chosen, _ = rng.element(others, rng.seed("invisible"))
+    new = _copy_joker(chosen)
+    if "invis_rounds" in new.ability:
+        new.ability["invis_rounds"] = 0
+    _add_joker(gs, new)
 
 
 def _handle_use_consumable(
@@ -1107,7 +1218,7 @@ def _handle_redeem_voucher(gs: dict[str, Any], idx: int) -> dict[str, Any]:
         raise IllegalActionError(f"Invalid voucher index {idx}")
 
     card = vouchers[idx]
-    if card.cost > gs.get("dollars", 0):
+    if card.cost > _spendable(gs):
         raise IllegalActionError("Cannot afford voucher")
 
     gs["dollars"] -= card.cost
@@ -1142,7 +1253,7 @@ def _handle_open_booster(gs: dict[str, Any], idx: int) -> dict[str, Any]:
         raise IllegalActionError(f"Invalid booster index {idx}")
 
     pack = boosters[idx]
-    if pack.cost > gs.get("dollars", 0):
+    if pack.cost > 0 and pack.cost > _spendable(gs):
         raise IllegalActionError("Cannot afford booster")
 
     gs["dollars"] -= pack.cost
@@ -1241,8 +1352,7 @@ def _handle_pick_pack_card(
 
     elif card_set == "Joker":
         # Buffoon pack: add to joker slots
-        gs.setdefault("jokers", []).append(card)
-        gs.setdefault("used_jokers", {})[card.center_key] = True
+        _add_joker(gs, card)
 
     else:
         # Standard pack: playing card → add to deck
@@ -1285,16 +1395,19 @@ def _handle_reroll(gs: dict[str, Any]) -> dict[str, Any]:
     free = cr.get("free_rerolls", 0)
     cost = cr.get("reroll_cost", 5)
 
-    if free > 0:
-        cr["free_rerolls"] = free - 1
-    elif gs.get("dollars", 0) >= cost:
-        gs["dollars"] -= cost
-    else:
+    # button_callbacks.lua:2077 and 2860: pay unless free, then recompute
+    # the price; a free reroll does not raise it (calculate_reroll_cost(final_free)).
+    if free <= 0 and cost != 0 and _spendable(gs) - cost < 0:
         raise IllegalActionError("Cannot afford reroll")
+    if free <= 0:
+        gs["dollars"] = gs.get("dollars", 0) - cost
+    final_free = free > 0
+    cr["free_rerolls"] = max(free - 1, 0)
+    if not final_free:
+        cr["reroll_cost_increase"] = cr.get("reroll_cost_increase", 0) + 1
+    from jackdaw.engine.shop import calculate_reroll_cost
 
-    # Increment reroll cost for next reroll
-    cr["reroll_cost_increase"] = cr.get("reroll_cost_increase", 0) + 1
-    cr["reroll_cost"] = gs.get("base_reroll_cost", 5) + cr["reroll_cost_increase"]
+    calculate_reroll_cost(gs)
 
     # Track stat
     gs.setdefault("round_scores", {})
@@ -1438,6 +1551,23 @@ def _draw_hand(gs: dict[str, Any]) -> None:
     _sort_hand_desc(hand)
 
 
+def _set_dollar_tallies(gs: dict[str, Any]) -> None:
+    """Fill the counts Cloud 9 and Satellite pay on.
+
+    Cloud 9's ``nine_tally`` is the 9s in the full deck (card.lua:4192,
+    recomputed every frame).  Satellite pays per distinct Planet used this
+    run (``G.GAME.consumeable_usage``, card.lua:1669).
+    """
+    full_deck = [c for area in ("deck", "hand", "discard_pile", "played_cards_area") for c in gs.get(area, []) or []]
+    nines = sum(1 for c in full_deck if c.get_id() == 9)
+    planets = sum(1 for v in gs.get("consumeable_usage", {}).values() if v.get("set") == "Planet")
+    for j in gs.get("jokers", []):
+        if j.center_key == "j_cloud_9":
+            j.ability["nine_tally"] = nines
+        elif j.center_key == "j_satellite":
+            j.ability["planet_types_used"] = planets
+
+
 def _round_won(gs: dict[str, Any]) -> None:
     """Handle winning a round — transition to ROUND_EVAL.
 
@@ -1474,13 +1604,18 @@ def _round_won(gs: dict[str, Any]) -> None:
         discards_left=cr.get("discards_left", 0),
         joker_count=len(jokers),
     )
-    eor = on_end_of_round(jokers, game_snap, rng)
-    # Apply joker end-of-round dollars
-    gs["dollars"] = gs.get("dollars", 0) + eor.get("dollars_earned", 0)
-    # Remove self-destructed jokers (Popcorn, Turtle Bean, etc.)
+    _set_dollar_tallies(gs)
+    eor = on_end_of_round(jokers, game_snap, rng, blind=blind)
+    # Joker dollars are paid with the rest of the round's earnings at cash
+    # out (calculate_round_earnings below), not here: paying them now paid
+    # them twice and counted them toward interest.
+    # Remove self-destructed jokers (Popcorn, Gros Michel, etc.)
     for removed_joker in eor.get("jokers_removed", []):
         if removed_joker in jokers:
-            jokers.remove(removed_joker)
+            _remove_joker(gs, removed_joker)
+    for mut in eor.get("mutations", []):
+        if mut.get("pool_flag"):
+            gs.setdefault("pool_flags", {})[mut["pool_flag"]] = True
 
     # ------------------------------------------------------------------
     # 2. Process perishable/rental
@@ -1643,32 +1778,76 @@ def _fire_setting_blind(
     jokers: list,
     blind: Any,
 ) -> list[dict[str, Any]]:
-    """Fire ``setting_blind`` on all jokers and collect mutations.
+    """Fire ``setting_blind`` on all jokers, left to right, as the game does.
 
-    Returns a list of side-effect dicts from JokerResult.extra.
+    card.lua:2491.  Each joker sees what the jokers to its left did: a joker
+    marked ``getting_sliced`` by Madness or Ceremonial Dagger does not fire,
+    Madness never picks a joker already marked, and Ceremonial Dagger frees
+    a slot for a Riff-raff to its right (``G.GAME.joker_buffer``), while a
+    joker Madness kills still counts as present.  Destruction and creation
+    are events that run after the loop: Riff-raff's jokers are created first
+    (the dying jokers are still held, so the pool excludes them), then the
+    sliced jokers are removed.  Created jokers go to the right end.
+
+    Returns the side effects the joker-area logic does not handle.
     """
     from jackdaw.engine.jokers import GameSnapshot, JokerContext, calculate_joker
 
-    game_snap = GameSnapshot(
-        joker_count=len(jokers),
-        joker_slots=gs.get("joker_slots", 5),
-        money=gs.get("dollars", 0),
-    )
-
+    rng = gs.get("rng")
+    slots = gs.get("joker_slots", 5)
+    buffer = 0
+    sliced: list = []
+    to_create = 0
     mutations: list[dict[str, Any]] = []
-    for joker in jokers:
-        if getattr(joker, "debuff", False):
+    for joker in list(jokers):
+        if getattr(joker, "debuff", False) or getattr(joker, "getting_sliced", False):
             continue
-        ctx = JokerContext(
-            setting_blind=True,
-            blind=blind,
-            jokers=jokers,
-            game=game_snap,
+        game_snap = GameSnapshot(
+            joker_count=len(jokers) + buffer,
+            joker_slots=slots,
+            money=gs.get("dollars", 0),
         )
+        ctx = JokerContext(setting_blind=True, blind=blind, jokers=jokers, game=game_snap, rng=rng)
         result = calculate_joker(joker, ctx)
-        if result and result.extra:
-            mutations.append(result.extra)
+        if not (result and result.extra):
+            continue
+        extra = dict(result.extra)
+        if extra.pop("destroy_random_joker", False):
+            # Madness: any other joker, not eternal, not already sliced.
+            candidates = [
+                j for j in jokers
+                if j is not joker and not getattr(j, "eternal", False)
+                and not getattr(j, "getting_sliced", False)
+            ]
+            if candidates and rng is not None:
+                target, _ = rng.element(candidates, rng.seed("madness"))
+                target.getting_sliced = True
+                sliced.append(target)
+        target = extra.pop("destroy_joker", None)
+        if target is not None:
+            # Ceremonial Dagger: its handler checked the neighbour and added the mult.
+            target.getting_sliced = True
+            sliced.append(target)
+            buffer -= 1
+        create = extra.get("create")
+        if create and create.get("type") == "Joker":
+            # Riff-raff: the handler capped the count by joker_count + buffer.
+            extra.pop("create")
+            buffer += create.get("count", 1)
+            to_create += create.get("count", 1)
+        if extra:
+            mutations.append(extra)
 
+    from jackdaw.engine.card_factory import create_card
+
+    ante = gs.get("round_resets", {}).get("ante", 1)
+    for _ in range(to_create):
+        card = create_card("Joker", rng, ante, area="jokers", forced_rarity=1, append="rif",
+                           game_state=gs)
+        _add_joker(gs, card)
+    for j in sliced:
+        _remove_joker(gs, j)
+        j.getting_sliced = False
     return mutations
 
 
@@ -1689,17 +1868,6 @@ def _apply_setting_blind_mutations(
                 # Un-debuff all playing cards
                 for card in gs.get("deck", []):
                     card.debuff = False
-
-        # Madness: destroy random joker (not self)
-        if mut.get("destroy_random_joker") and len(jokers) > 1:
-            if rng:
-                # Pick a random non-self joker to destroy
-
-                candidates = [j for j in jokers if j is not jokers[0]]
-                if candidates:
-                    seed_val = rng.seed("madness")
-                    target, _ = rng.element(candidates, seed_val)
-                    jokers.remove(target)
 
         # Burglar: set hands / remove discards
         if "set_hands" in mut:
@@ -1725,15 +1893,6 @@ def _apply_setting_blind_mutations(
                 if create.get("seal"):
                     c.seal = "Gold"  # Certificate default
                 deck.append(c)
-            elif ctype == "Joker":
-                # Riff-raff: create Common jokers
-                count = create.get("count", 1)
-                for _ in range(count):
-                    from jackdaw.engine.card import Card as _Card
-
-                    j = _Card(center_key="j_joker")
-                    j.ability = {"set": "Joker", "effect": "", "name": "Joker"}
-                    jokers.append(j)
             elif ctype == "Tarot":
                 # Cartomancer: create Tarot
                 consumables: list = gs.setdefault("consumables", [])
@@ -1859,6 +2018,11 @@ def _use_consumable_card(
 
     # Apply all mutations
     _apply_consumable_result(gs, result, card)
+
+    # set_consumeable_usage (misc_functions.lua:1191): per key, for Satellite
+    usage = gs.setdefault("consumeable_usage", {})
+    entry = usage.setdefault(card.center_key, {"count": 0, "set": card.ability.get("set")})
+    entry["count"] += 1
 
     # Fire using_consumeable joker context (Constellation, etc.)
     if getattr(result, "notify_jokers_consumeable", False):

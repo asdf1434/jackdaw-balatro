@@ -349,8 +349,14 @@ def on_end_of_round(
     jokers: list[Card],
     game: GameSnapshot,
     rng: PseudoRandom | None = None,
+    blind: Any = None,
 ) -> dict[str, Any]:
     """Process all joker end-of-round effects.
+
+    The game fires ``end_of_round`` in ``end_round`` (state_events.lua:101)
+    and pays ``calculate_dollar_bonus`` later, in ``evaluate_round``
+    (state_events.lua:1176), so a Rocket upgraded at a boss pays the new
+    amount that round.  *blind* is the blind just beaten (Rocket, Campfire).
 
     Returns a dict with:
         dollars_earned: total dollars from calc_dollar_bonus
@@ -361,16 +367,13 @@ def on_end_of_round(
     removed: list[Card] = []
     mutations: list[dict[str, Any]] = []
 
-    # 1. Dollar bonuses (calc_dollar_bonus)
-    for joker in jokers:
-        dollars += calc_dollar_bonus(joker, game)
-
-    # 2. End-of-round calculate_joker effects
+    # 1. End-of-round calculate_joker effects
     ctx = JokerContext(
         end_of_round=True,
         jokers=jokers,
         rng=rng,
         game=game,
+        blind=blind,
     )
     for joker in jokers:
         if joker.debuff:
@@ -381,6 +384,11 @@ def on_end_of_round(
                 removed.append(joker)
             if result.extra:
                 mutations.append(result.extra)
+
+    # 2. Dollar bonuses (calc_dollar_bonus), from the jokers still held
+    for joker in jokers:
+        if joker not in removed:
+            dollars += calc_dollar_bonus(joker, game)
 
     return {
         "dollars_earned": dollars,
