@@ -1384,13 +1384,16 @@ def _find_right_neighbor(card: Card, ctx: JokerContext) -> Card | None:
 
 
 def _find_leftmost(card: Card, ctx: JokerContext) -> Card | None:
-    """Find the leftmost joker that isn't *card*."""
-    if ctx.jokers is None:
+    """The leftmost joker, or ``None`` when *card* is the leftmost itself.
+
+    Source: card.lua:2322 -- ``other_joker = G.jokers.cards[1]`` and then
+    ``other_joker ~= self``: a Brainstorm in the first slot copies nothing.
+    It does not fall through to the next joker.
+    """
+    if not ctx.jokers:
         return None
-    for j in ctx.jokers:
-        if j is not card:
-            return j
-    return None
+    first = ctx.jokers[0]
+    return None if first is card else first
 
 
 @register("j_blueprint")
@@ -1980,7 +1983,10 @@ def _riff_raff(card: Card, ctx: JokerContext) -> JokerResult | None:
 
     Source: card.lua:2529. Checks joker slot availability.
     """
-    if ctx.setting_blind and not getattr(card, "getting_sliced", False):
+    # card.lua:2529 reads ``(context.blueprint_card or self).getting_sliced``:
+    # a Blueprint copying a sliced Riff-raff still creates, and a sliced
+    # Blueprint is skipped by the game loop before it gets here.
+    if ctx.setting_blind and not getattr(ctx.blueprint_card or card, "getting_sliced", False):
         joker_count = ctx.game.joker_count if ctx.game else 0
         joker_slots = ctx.game.joker_slots if ctx.game else 5
         available = joker_slots - joker_count

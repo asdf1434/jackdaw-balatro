@@ -356,3 +356,26 @@ def test_showman_and_astronomer_flags_follow_the_held_jokers():
     assert gs["has_astronomer"] and planet.cost == 0
     step(gs, SellCard(area="jokers", card_index=_keys(gs).index("j_astronomer")))
     assert not gs["has_astronomer"] and planet.cost > 0
+
+
+# --- BalatroRL stage 6: copies at blind select ----------------------------------
+
+
+def test_blueprint_copies_riff_raff_at_blind_select():
+    # card.lua:2529: Riff-raff has no ``not context.blueprint`` guard, and each
+    # firing takes min(2, slots - (jokers + joker_buffer)).  Blueprint fires
+    # first and makes two; Riff-raff then has room for one.
+    gs = _run("BPRIF", "j_blueprint", "j_riff_raff")
+    step(gs, SelectBlind())
+    assert len(gs["jokers"]) == 5
+
+
+def test_blueprint_does_not_copy_madness_or_the_dagger():
+    # card.lua:2503, 2561: both are guarded by ``not context.blueprint``.
+    gs = _run("BPMAD", "j_blueprint", "j_madness")
+    step(gs, SelectBlind())
+    madness = next(j for j in gs["jokers"] if j.center_key == "j_madness")
+    assert madness.ability["x_mult"] == 1.5
+    gs = _run("BPDAG", "j_blueprint", "j_ceremonial", "j_joker")
+    step(gs, SelectBlind())
+    assert _keys(gs) == ["j_blueprint", "j_ceremonial"]
