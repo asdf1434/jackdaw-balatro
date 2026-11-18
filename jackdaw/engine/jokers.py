@@ -56,6 +56,12 @@ class GameSnapshot:
     idol_card: dict[str, Any] | None = None
     ancient_suit: str | None = None
     skips: int = 0
+    #: ``G.GAME.hands_played`` while the hand scores: hands finished this run,
+    #: not counting the one being scored (state_events.lua:523 adds it after
+    #: ``evaluate_play``).  Loyalty Card reads it.
+    run_hands_played: int = 0
+    #: ``G.GAME.current_round.castle_card.suit`` (Castle).
+    castle_suit: str | None = None
 
 
 _DEFAULT_GAME = GameSnapshot()
@@ -218,6 +224,9 @@ class JokerContext:
                         enhanced_card_count=enhanced_card_count,
                         hands_left=hands_left,
                         hands_played=hands_played,
+                        # A context built from flat kwargs has one hand count,
+                        # which Loyalty Card's unit tests mean as the run's.
+                        run_hands_played=hands_played,
                         discards_left=discards_left,
                         discards_used=discards_used,
                         probabilities_normal=probabilities_normal,
@@ -1185,7 +1194,9 @@ def _loyalty_card(card: Card, ctx: JokerContext) -> JokerResult | None:
         extra = card.ability.get("extra", {})
         every = extra.get("every", 5)
         hands_at_create = card.ability.get("hands_played_at_create", 0)
-        remaining = (every - 1 - (ctx.game.hands_played - hands_at_create)) % (every + 1)
+        # G.GAME.hands_played is the run's count, and the game adds the hand
+        # after it scores; ``game.hands_played`` here is the round's count.
+        remaining = (every - 1 - (ctx.game.run_hands_played - hands_at_create)) % (every + 1)
         if remaining == every:
             return JokerResult(Xmult_mod=extra.get("Xmult", 4))
     return None
@@ -2434,7 +2445,9 @@ def _castle(card: Card, ctx: JokerContext) -> JokerResult | None:
     Fires in discard context.
     """
     if ctx.discard and ctx.other_card is not None and not ctx.blueprint:
-        castle_suit = card.ability.get("castle_card_suit")
+        # card.lua:2816 reads G.GAME.current_round.castle_card.suit; nothing
+        # ever set the ability key this used to read.
+        castle_suit = ctx.game.castle_suit
         if castle_suit and ctx.other_card.is_suit(castle_suit, smeared=ctx.smeared):
             extra = card.ability.get("extra", {})
             extra["chips"] = extra.get("chips", 0) + extra.get("chip_mod", 3)

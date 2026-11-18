@@ -552,6 +552,9 @@ def _handle_play_hand(gs: dict[str, Any], indices: tuple[int, ...]) -> dict[str,
     # at the top level.
     gs["hands_left"] = cr.get("hands_left", 0)
     gs["current_round_hands_played"] = cr.get("hands_played", 0)
+    # Step 3 above already counted this hand; the game counts it after scoring.
+    gs["run_hands_played"] = gs.get("hands_played", 0) - 1
+    gs["castle_suit"] = cr.get("castle_card", {}).get("suit")
     gs["discards_left"] = cr.get("discards_left", 0)
     gs["discards_used"] = cr.get("discards_used", 0)
     gs["money"] = gs.get("dollars", 0)
@@ -935,6 +938,7 @@ def _build_discard_snapshot(gs: dict[str, Any], jokers: list) -> Any:
         discards_used=cr.get("discards_used", 0),
         mail_card_id=cr.get("mail_card", {}).get("id"),
         skips=gs.get("skips", 0),
+        castle_suit=cr.get("castle_card", {}).get("suit"),
     )
 
 
