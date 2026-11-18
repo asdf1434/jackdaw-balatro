@@ -132,6 +132,13 @@ class JokerContext:
     blueprint: int = 0
     blueprint_card: Card | None = None
 
+    #: ``G.GAME.dollar_buffer`` while a hand scores: dollars this hand has
+    #: already earned (Rough Gem, Business Card, Reserved Parking, To Do List,
+    #: card dollars), which the game pays through queued events.  Bull and
+    #: Bootstraps read ``G.GAME.dollars + G.GAME.dollar_buffer`` (card.lua:3936,
+    #: 4046), so they see money earned earlier in the same hand.
+    dollar_buffer: int = 0
+
     # Meta joker flags
     smeared: bool = False
     pareidolia: bool = False
@@ -359,6 +366,7 @@ def on_end_of_round(
     game: GameSnapshot,
     rng: PseudoRandom | None = None,
     blind: Any = None,
+    hand_levels: Any = None,
 ) -> dict[str, Any]:
     """Process all joker end-of-round effects.
 
@@ -383,6 +391,7 @@ def on_end_of_round(
         rng=rng,
         game=game,
         blind=blind,
+        hand_levels=hand_levels,
     )
     for joker in jokers:
         if joker.debuff:
@@ -1057,10 +1066,14 @@ def _steel_joker(card: Card, ctx: JokerContext) -> JokerResult | None:
 
 @register("j_bull")
 def _bull(card: Card, ctx: JokerContext) -> JokerResult | None:
-    """Bull: +2 chips per $1 held. Source: card.lua:3936."""
-    if ctx.joker_main and ctx.game.money > 0:
+    """Bull: +2 chips per $1 held. Source: card.lua:3936.
+
+    Reads the dollars held plus the hand's ``dollar_buffer``.
+    """
+    money = ctx.game.money + ctx.dollar_buffer
+    if ctx.joker_main and money > 0:
         return JokerResult(
-            chip_mod=card.ability.get("extra", 2) * max(0, ctx.game.money),
+            chip_mod=card.ability.get("extra", 2) * max(0, money),
         )
     return None
 
@@ -1165,11 +1178,14 @@ def _seeing_double(card: Card, ctx: JokerContext) -> JokerResult | None:
 
 @register("j_bootstraps")
 def _bootstraps(card: Card, ctx: JokerContext) -> JokerResult | None:
-    """Bootstraps: +2 mult per $5 held. Source: card.lua:4046."""
+    """Bootstraps: +2 mult per $5 held. Source: card.lua:4046.
+
+    Reads the dollars held plus the hand's ``dollar_buffer``.
+    """
     if ctx.joker_main:
         extra = card.ability.get("extra", {})
         per = extra.get("dollars", 5)
-        buckets = ctx.game.money // per if per > 0 else 0
+        buckets = (ctx.game.money + ctx.dollar_buffer) // per if per > 0 else 0
         if buckets >= 1:
             return JokerResult(mult_mod=extra.get("mult", 2) * buckets)
     return None
@@ -1356,13 +1372,41 @@ def _trading(card: Card, ctx: JokerContext) -> JokerResult | None:
 
 @register("j_todo_list")
 def _to_do_list(card: Card, ctx: JokerContext) -> JokerResult | None:
-    """To Do List: +$4 if hand matches to_do_poker_hand. Source: card.lua:3491."""
+    """To Do List: +$4 if hand matches to_do_poker_hand. Source: card.lua:3491.
+
+    The hand is drawn when the card is created (card.lua:311,
+    ``card_factory.create_joker``) and again at the end of every round, from
+    the visible hands other than the current one (card.lua:2975).  The redraw
+    is guarded by ``not context.blueprint``; the payout is not, so a copy pays.
+    """
+    if ctx.end_of_round and not ctx.blueprint:
+        card.ability["to_do_poker_hand"] = draw_to_do_hand(
+            ctx.rng, ctx.hand_levels, exclude=card.ability.get("to_do_poker_hand"))
+        return None
     if ctx.joker_main and ctx.scoring_name:
         target = card.ability.get("to_do_poker_hand")
         if target and ctx.scoring_name == target:
             extra = card.ability.get("extra", {})
             return JokerResult(dollars=extra.get("dollars", 4))
     return None
+
+
+def draw_to_do_hand(rng: Any, hand_levels: Any, exclude: str | None = None) -> str:
+    """A hand for To Do List: one of the visible hands other than *exclude*.
+
+    ``pseudorandom_element(_poker_hands, pseudoseed('to_do'))``.  Without a
+    generator it is the first candidate, so a card built outside a run still
+    names a hand.
+    """
+    from jackdaw.engine.hand_levels import HandLevels
+
+    levels = hand_levels if hand_levels is not None else HandLevels()
+    names = [str(ht.value if hasattr(ht, "value") else ht)
+             for ht, state in levels._hands.items() if state.visible]
+    names = [n for n in names if n != exclude]
+    if rng is None:
+        return names[0]
+    return rng.element(names, rng.seed("to_do"))[0]
 
 
 # ---------------------------------------------------------------------------
@@ -2516,12 +2560,13 @@ def _mr_bones(card: Card, ctx: JokerContext) -> JokerResult | None:
 def _burnt(card: Card, ctx: JokerContext) -> JokerResult | None:
     """Burnt Joker: level up discard hand on first discard of round.
 
-    Source: card.lua:2749. Fires in discard context when discards_used <= 0.
+    Source: card.lua:2749.  Fires in the ``pre_discard`` context, once per
+    discard, when ``discards_used <= 0``.  There is no ``context.blueprint``
+    guard and the joker is ``blueprint_compat``, so a copy levels the hand
+    again.
     """
-    if ctx.discard and not ctx.blueprint:
-        if ctx.game.discards_used <= 0 and ctx.other_card is not None:
-            if ctx.full_hand and ctx.other_card is ctx.full_hand[-1]:
-                return JokerResult(level_up=True)
+    if ctx.pre_discard and ctx.game.discards_used <= 0:
+        return JokerResult(level_up=True)
     return None
 
 

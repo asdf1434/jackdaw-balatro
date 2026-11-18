@@ -723,7 +723,8 @@ def score_hand(
             mult += edition.get("mult_mod", 0)
 
         # 9b: Main joker effect
-        main_ctx = JokerContext(joker_main=True, **_shared)
+        # ``dollars`` so far is the game's dollar_buffer (Bull, Bootstraps).
+        main_ctx = JokerContext(joker_main=True, dollar_buffer=dollars, **_shared)
         result = calculate_joker(joker, main_ctx)
         if result:
             if result.mult_mod:

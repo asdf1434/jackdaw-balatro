@@ -121,6 +121,8 @@ def create_joker(
     perishable: bool = False,
     rental: bool = False,
     hands_played: int = 0,
+    rng: Any = None,
+    hand_levels: Any = None,
 ) -> Card:
     """Create a joker card from a P_CENTERS key (e.g. ``"j_joker"``).
 
@@ -131,9 +133,17 @@ def create_joker(
         perishable: Whether the joker has the Perishable sticker.
         rental: Whether the joker has the Rental sticker.
         hands_played: Current hands_played for post-init fields.
+        rng, hand_levels: The run's generator and hand levels, for a joker
+            that draws something when it is created (To Do List's hand).
     """
     card = Card()
     card.set_ability(key, hands_played=hands_played)
+    if key == "j_todo_list":
+        # card.lua:311: To Do List draws its hand in set_ability.  Without
+        # this the key was never set and the joker never paid.
+        from jackdaw.engine.jokers import draw_to_do_hand
+
+        card.ability["to_do_poker_hand"] = draw_to_do_hand(rng, hand_levels)
     if edition:
         card.set_edition(edition)
     if eternal:
@@ -363,6 +373,11 @@ def create_card(
     # ------------------------------------------------------------------
     card = Card()
     card.set_ability(key)
+    if key == "j_todo_list":
+        # card.lua:311: To Do List draws its hand when it is created.
+        from jackdaw.engine.jokers import draw_to_do_hand
+
+        card.ability["to_do_poker_hand"] = draw_to_do_hand(rng, gs.get("hand_levels"))
 
     # ------------------------------------------------------------------
     # 3. Joker modifiers (shop / pack context only)

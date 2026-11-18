@@ -1606,10 +1606,13 @@ def _round_won(gs: dict[str, Any]) -> None:
         money=gs.get("dollars", 0),
         hands_left=cr.get("hands_left", 0),
         discards_left=cr.get("discards_left", 0),
+        # Delayed Gratification pays only if no discard was used (card.lua:1675).
+        discards_used=cr.get("discards_used", 0),
         joker_count=len(jokers),
     )
     _set_dollar_tallies(gs)
-    eor = on_end_of_round(jokers, game_snap, rng, blind=blind)
+    eor = on_end_of_round(jokers, game_snap, rng, blind=blind,
+                          hand_levels=gs.get("hand_levels"))
     # Joker dollars are paid with the rest of the round's earnings at cash
     # out (calculate_round_earnings below), not here: paying them now paid
     # them twice and counted them toward interest.
