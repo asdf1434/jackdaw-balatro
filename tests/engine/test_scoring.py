@@ -439,9 +439,20 @@ class TestAfterPhase:
             HandLevels(),
             _small_blind(),
             PseudoRandom("T"),
-            blind_chips=300,
+            blind_chips=256,
             game_state={"hands_left": 0},
         )
         assert r.total == 64
         assert r.saved is True
         assert bones in r.jokers_removed
+
+    def test_mr_bones_needs_a_quarter_of_the_target(self):
+        """card.lua:3047: G.GAME.chips / G.GAME.blind.chips >= 0.25, over the round."""
+        played = [_card("Hearts", "Ace"), _card("Spades", "Ace")]
+        for before, saved in ((0, False), (11, True)):
+            bones = _joker("j_mr_bones")
+            r = score_hand(played, [], [bones], HandLevels(), _small_blind(), PseudoRandom("T"),
+                           blind_chips=300, game_state={"hands_left": 0, "chips": before})
+            assert r.total == 64
+            assert r.saved is saved
+            assert (bones in r.jokers_removed) is saved

@@ -1132,13 +1132,13 @@ def _flower_pot(card: Card, ctx: JokerContext) -> JokerResult | None:
         for c in ctx.scoring_hand:
             if c.ability.get("name") != "Wild Card":
                 for s in suits:
-                    if suits[s] == 0 and c.is_suit(s, bypass_debuff=True):
+                    if suits[s] == 0 and c.is_suit(s, bypass_debuff=True, smeared=ctx.smeared):
                         suits[s] += 1
                         break
         for c in ctx.scoring_hand:
             if c.ability.get("name") == "Wild Card":
                 for s in suits:
-                    if suits[s] == 0 and c.is_suit(s):
+                    if suits[s] == 0 and c.is_suit(s, smeared=ctx.smeared):
                         suits[s] += 1
                         break
         if all(v > 0 for v in suits.values()):
@@ -1157,17 +1157,17 @@ def _seeing_double(card: Card, ctx: JokerContext) -> JokerResult | None:
         for c in ctx.scoring_hand:
             if c.ability.get("name") != "Wild Card":
                 for s in suits:
-                    if c.is_suit(s):
+                    if c.is_suit(s, smeared=ctx.smeared):
                         suits[s] += 1
         for c in ctx.scoring_hand:
             if c.ability.get("name") == "Wild Card":
-                if suits["Clubs"] == 0 and c.is_suit("Clubs"):
+                if suits["Clubs"] == 0 and c.is_suit("Clubs", smeared=ctx.smeared):
                     suits["Clubs"] += 1
-                elif suits["Diamonds"] == 0 and c.is_suit("Diamonds"):
+                elif suits["Diamonds"] == 0 and c.is_suit("Diamonds", smeared=ctx.smeared):
                     suits["Diamonds"] += 1
-                elif suits["Spades"] == 0 and c.is_suit("Spades"):
+                elif suits["Spades"] == 0 and c.is_suit("Spades", smeared=ctx.smeared):
                     suits["Spades"] += 1
-                elif suits["Hearts"] == 0 and c.is_suit("Hearts"):
+                elif suits["Hearts"] == 0 and c.is_suit("Hearts", smeared=ctx.smeared):
                     suits["Hearts"] += 1
         has_club = suits["Clubs"] > 0
         has_other = suits["Hearts"] > 0 or suits["Diamonds"] > 0 or suits["Spades"] > 0
@@ -1528,7 +1528,7 @@ def _ride_the_bus(card: Card, ctx: JokerContext) -> JokerResult | None:
     Source: card.lua:3525. Resets to 0 when a face card IS scored.
     """
     if ctx.before and not ctx.blueprint and ctx.scoring_hand is not None:
-        has_face = any(c.is_face() for c in ctx.scoring_hand)
+        has_face = any(c.is_face(pareidolia=ctx.pareidolia) for c in ctx.scoring_hand)
         if has_face:
             card.ability["mult"] = 0
         else:
@@ -1757,7 +1757,7 @@ def _caino(card: Card, ctx: JokerContext) -> JokerResult | None:
     Uses ``ability.caino_xmult`` (separate from x_mult).
     """
     if ctx.cards_destroyed and not ctx.blueprint:
-        face_count = sum(1 for c in ctx.cards_destroyed if c.is_face())
+        face_count = sum(1 for c in ctx.cards_destroyed if c.is_face(pareidolia=ctx.pareidolia))
         if face_count > 0:
             card.ability["caino_xmult"] = (
                 card.ability.get("caino_xmult", 1) + card.ability.get("extra", 1) * face_count
@@ -2265,7 +2265,8 @@ def _burglar(card: Card, ctx: JokerContext) -> JokerResult | None:
 
     Source: card.lua:2522. Returns side-effect descriptor.
     """
-    if ctx.setting_blind and not getattr(card, "getting_sliced", False):
+    # card.lua:2522 reads the copier's flag: ``(context.blueprint_card or self)``.
+    if ctx.setting_blind and not getattr(ctx.blueprint_card or card, "getting_sliced", False):
         extra_hands = card.ability.get("extra", 3)
         return JokerResult(
             extra={
@@ -2549,9 +2550,10 @@ def _ramen(card: Card, ctx: JokerContext) -> JokerResult | None:
 def _mr_bones(card: Card, ctx: JokerContext) -> JokerResult | None:
     """Mr. Bones: prevents death if score ≥ 25% of blind. Source: card.lua:3047.
 
-    Returns saved=True and remove=True (self-destructs after saving).
+    Returns saved=True and remove=True (self-destructs after saving).  The
+    caller sets ``ctx.chips_ratio`` to G.GAME.chips / G.GAME.blind.chips.
     """
-    if getattr(ctx, "game_over", False):
+    if getattr(ctx, "game_over", False) and getattr(ctx, "chips_ratio", 0.0) >= 0.25:
         return JokerResult(saved=True, remove=True)
     return None
 

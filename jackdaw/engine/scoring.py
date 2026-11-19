@@ -453,7 +453,9 @@ def score_hand(
     )
 
     # === Phase 1-2: Hand detection ===
-    eval_result = evaluate_hand(played_cards, jokers=None)
+    # misc_functions.lua:524-567: get_flush and get_straight ask find_joker for
+    # Four Fingers, Shortcut and (through is_suit) Smeared Joker.
+    eval_result = evaluate_hand(played_cards, jokers=jokers)
     hand_type = eval_result.detected_hand
     scoring_cards = eval_result.scoring_cards
     poker_hands = eval_result.poker_hands
@@ -823,13 +825,19 @@ def score_hand(
             jokers_removed.append(joker)
 
     # Mr. Bones save check: if score < blind target and last hand
+    # state_events.lua:92-106 and card.lua:3047: the round is lost when the
+    # round's chips, this hand included, are below the target with no hand
+    # left; Mr. Bones saves it at 25% of the target or more.  ``gs['chips']``
+    # is the round's score before this hand.
     saved = False
-    if blind_chips > 0 and total < blind_chips and gs.get("hands_left", 0) == 0:
+    round_chips = gs.get("chips", 0) + total
+    if blind_chips > 0 and round_chips < blind_chips and gs.get("hands_left", 0) == 0:
         for joker in jokers:
             if joker.debuff:
                 continue
             bones_ctx = JokerContext(**_shared)
             bones_ctx.game_over = True  # type: ignore[attr-defined]
+            bones_ctx.chips_ratio = round_chips / blind_chips  # type: ignore[attr-defined]
             bones_result = calculate_joker(joker, bones_ctx)
             if bones_result and bones_result.saved:
                 saved = True

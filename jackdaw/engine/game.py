@@ -176,6 +176,11 @@ def _handle_select_blind(gs: dict[str, Any]) -> dict[str, Any]:
     # ------------------------------------------------------------------
     # 3. Process setting_blind side-effects
     # ------------------------------------------------------------------
+    # Burglar's hands and discards are an event that runs after new_round has
+    # reset both (card.lua:2523, state_events.lua:298), so they are applied
+    # after start_round below, once per Burglar or copy of it.
+    burglar = [m for m in setting_mutations if "set_hands" in m or "set_discards" in m]
+    setting_mutations = [m for m in setting_mutations if m not in burglar]
     _apply_setting_blind_mutations(gs, setting_mutations, jokers)
 
     # ------------------------------------------------------------------
@@ -192,6 +197,7 @@ def _handle_select_blind(gs: dict[str, Any]) -> dict[str, Any]:
     # ------------------------------------------------------------------
     if blind.boss and not blind.disabled:
         _apply_boss_blind_effects(gs, blind)
+    _apply_setting_blind_mutations(gs, burglar, jokers)
 
     # Debuff playing cards based on boss blind
     deck: list = gs.get("deck", [])

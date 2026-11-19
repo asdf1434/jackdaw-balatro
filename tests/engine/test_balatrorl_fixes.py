@@ -3,7 +3,8 @@
 BalatroRL checks its scorer against jackdaw; these four bugs changed what
 Swashbuckler, The Idol and Card Sharp score.  The tests at the end are joker
 plan stage 10's: the dollar buffer Bull and Bootstraps read, To Do List's hand,
-Burnt Joker's context and Delayed Gratification's condition.
+Burnt Joker's context and Delayed Gratification's condition.  The last group is
+stage 11's: the jokers that change the rules.
 """
 
 from __future__ import annotations
@@ -144,3 +145,101 @@ def test_delayed_gratification_pays_only_without_a_discard():
         earned[discard] = gs["round_earnings"].joker_dollars
     # The Red Deck starts with four discards: $2 for each one left.
     assert earned == {False: 2 * (discards + 1), True: 0}
+
+
+# --- joker plan stage 11: the jokers that change the rules ---------------------
+
+
+def _cards(spec):
+    from jackdaw.engine.card_factory import create_playing_card
+    from jackdaw.engine.data.enums import Rank, Suit
+
+    ranks = {"2": Rank.TWO, "3": Rank.THREE, "4": Rank.FOUR, "5": Rank.FIVE, "6": Rank.SIX,
+             "7": Rank.SEVEN, "8": Rank.EIGHT, "9": Rank.NINE, "T": Rank.TEN, "J": Rank.JACK,
+             "Q": Rank.QUEEN, "K": Rank.KING, "A": Rank.ACE}
+    suits = {"H": Suit.HEARTS, "D": Suit.DIAMONDS, "C": Suit.CLUBS, "S": Suit.SPADES}
+    return [create_playing_card(suits[c[1]], ranks[c[0]]) for c in spec.split()]
+
+
+def _hand(spec, *keys, **gs):
+    from jackdaw.engine.blind import Blind
+    from jackdaw.engine.hand_levels import HandLevels
+    from jackdaw.engine.rng import PseudoRandom
+    from jackdaw.engine.scoring import score_hand
+
+    return score_hand(_cards(spec), [], [create_joker(k) for k in keys], HandLevels(),
+                      Blind.create("bl_small", ante=1), PseudoRandom("RULES"), game_state=gs)
+
+
+def test_score_hand_reads_four_fingers_shortcut_and_smeared():
+    # misc_functions.lua:522-590: find_joker inside get_flush and get_straight.
+    assert _hand("2H 5H 9H KH 3S").hand_type == "High Card"
+    four = _hand("2H 5H 9H KH 3S", "j_four_fingers")
+    assert four.hand_type == "Flush" and len(four.scoring_cards) == 4
+    assert _hand("2H 4S 6D 8C TH", "j_shortcut").hand_type == "Straight"
+    assert _hand("2H 4S 6D 8C TH").hand_type == "High Card"
+    assert _hand("2H 5D 9H KD 3H", "j_smeared").hand_type == "Flush"
+    # The four flush cards and the four straight cards need not be the same four.
+    both = _hand("2H 3H 4H 5S 9H", "j_four_fingers")
+    assert both.hand_type == "Straight Flush" and len(both.scoring_cards) == 5
+
+
+def test_smeared_reaches_flower_pot_and_seeing_double():
+    # card.lua:3807-3862 go through Card:is_suit, which asks for Smeared Joker.
+    plain = _hand("2H 3H 5S 9S KS", "j_flower_pot")
+    smeared = _hand("2H 3H 5S 9S KS", "j_flower_pot", "j_smeared")
+    assert smeared.hand_type == plain.hand_type == "High Card"
+    assert _hand("2H 2D 5S 5C", "j_flower_pot").mult == 2 * 3
+    assert _hand("2H 2H 5S 5S", "j_flower_pot").mult == 2
+    assert _hand("2H 2H 5S 5S", "j_smeared", "j_flower_pot").mult == 2 * 3
+    # A black card is a Club and a Spade at once, so Seeing Double always fires on one.
+    assert _hand("5S 5S", "j_seeing_double").mult == 2
+    assert _hand("5S 5S", "j_smeared", "j_seeing_double").mult == 2 * 2
+    assert _hand("5H 5D", "j_smeared", "j_seeing_double").mult == 2
+
+
+def test_pareidolia_reaches_ride_the_bus():
+    # card.lua:3528: is_face, so every scoring card resets the count.
+    bus = create_joker("j_ride_the_bus")
+    bus.ability["mult"] = 5
+    from jackdaw.engine.blind import Blind
+    from jackdaw.engine.hand_levels import HandLevels
+    from jackdaw.engine.rng import PseudoRandom
+    from jackdaw.engine.scoring import score_hand
+
+    score_hand(_cards("2H 2S"), [], [bus, create_joker("j_pareidolia")], HandLevels(),
+               Blind.create("bl_small", ante=1), PseudoRandom("BUS"))
+    assert bus.ability["mult"] == 0
+
+
+def test_burglar_adds_hands_after_the_round_resets_them():
+    # card.lua:2522 is an event: it runs after new_round set hands and discards.
+    gs = initialize_run("b_red", 1, "BURGLAR")
+    gs["jokers"] = [create_joker("j_blueprint"), create_joker("j_burglar")]
+    step(gs, SelectBlind())
+    cr = gs["current_round"]
+    assert (cr["hands_left"], cr["discards_left"]) == (4 + 3 + 3, 0)
+
+
+def test_oops_doubles_the_probability_the_game_loop_reads():
+    gs = initialize_run("b_red", 1, "OOPS")
+    first, second = create_joker("j_oops"), create_joker("j_oops")
+    first.add_to_deck(gs)
+    assert gs["probabilities"]["normal"] == 2
+    second.add_to_deck(gs)
+    assert gs["probabilities"]["normal"] == 4
+    first.remove_from_deck(gs)
+    assert gs["probabilities"]["normal"] == 2
+
+
+def test_mr_bones_saves_the_round_once_and_the_blind_pays_nothing():
+    gs = initialize_run("b_red", 1, "BONES")
+    step(gs, SelectBlind())
+    gs["jokers"] = [create_joker("j_mr_bones"), create_joker("j_mr_bones")]
+    gs["current_round"]["hands_left"] = 1
+    gs["blind"].chips = 20
+    step(gs, PlayHand(card_indices=(0,)))
+    assert 5 <= gs["chips"] < 20
+    assert gs["phase"].name == "ROUND_EVAL"
+    assert [j.center_key for j in gs["jokers"]] == ["j_mr_bones"]
+    assert gs["round_earnings"].blind_reward == 0

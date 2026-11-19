@@ -184,7 +184,8 @@ def calculate_round_earnings(
     # ------------------------------------------------------------------
     # Step 2 — Blind reward (state_events.lua:1139)
     # ------------------------------------------------------------------
-    blind_reward = blind.dollars
+    # A round Mr. Bones saved pays no blind reward (state_events.lua:1144).
+    blind_reward = blind.dollars if game_state.get("chips", blind.chips) >= blind.chips else 0
 
     # ------------------------------------------------------------------
     # Step 3 — Unused hands bonus (state_events.lua:1165)

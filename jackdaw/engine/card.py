@@ -775,7 +775,10 @@ class Card:
         if name == "Turtle Bean" and isinstance(extra, dict):
             game_state["hand_size"] = game_state.get("hand_size", 0) + extra.get("h_size", 0)
         if name == "Oops! All 6s":
-            game_state["probabilities_normal"] = game_state.get("probabilities_normal", 1) * 2
+            # card.lua:608: every entry of G.GAME.probabilities doubles.
+            probs = game_state.setdefault("probabilities", {"normal": 1})
+            for key in probs:
+                probs[key] = probs[key] * 2
         if name == "To the Moon":
             amount = extra if isinstance(extra, int) else 0
             game_state["interest_amount"] = game_state.get("interest_amount", 0) + amount
@@ -817,9 +820,10 @@ class Card:
         if name == "Turtle Bean" and isinstance(extra, dict):
             game_state["hand_size"] = game_state.get("hand_size", 0) - extra.get("h_size", 0)
         if name == "Oops! All 6s":
-            game_state["probabilities_normal"] = max(
-                1, game_state.get("probabilities_normal", 1) // 2
-            )
+            # card.lua:665: halved, with no floor.
+            probs = game_state.setdefault("probabilities", {"normal": 1})
+            for key in probs:
+                probs[key] = probs[key] / 2
         if name == "To the Moon":
             amount = extra if isinstance(extra, int) else 0
             game_state["interest_amount"] = game_state.get("interest_amount", 0) - amount
