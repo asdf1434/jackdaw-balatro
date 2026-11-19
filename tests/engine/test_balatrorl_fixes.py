@@ -243,3 +243,50 @@ def test_mr_bones_saves_the_round_once_and_the_blind_pays_nothing():
     assert gs["phase"].name == "ROUND_EVAL"
     assert [j.center_key for j in gs["jokers"]] == ["j_mr_bones"]
     assert gs["round_earnings"].blind_reward == 0
+
+
+def test_a_discard_reads_pareidolia_smeared_and_the_hand_rules():
+    from jackdaw.engine.actions import Discard
+
+    # Faceless Joker: three face cards, and under Pareidolia every card is one.
+    for keys, paid in ((["j_faceless"], False), (["j_faceless", "j_pareidolia"], True)):
+        gs = initialize_run("b_red", 1, "FACES")
+        step(gs, SelectBlind())
+        gs["jokers"] = [create_joker(k) for k in keys]
+        gs["hand"] = _cards("2H 3S 4D 5C 9H 9S 9D 9C")
+        before = gs["dollars"]
+        step(gs, Discard(card_indices=(0, 1, 2)))
+        assert (gs["dollars"] - before == 5) is paid
+    # Castle counts the round's suit; under Smeared Joker, its colour.
+    for keys, gained in ((["j_castle"], 1), (["j_castle", "j_smeared"], 2)):
+        gs = initialize_run("b_red", 1, "CASTLE")
+        step(gs, SelectBlind())
+        gs["jokers"] = [create_joker(k) for k in keys]
+        gs["current_round"]["castle_card"] = {"suit": "Hearts"}
+        gs["hand"] = _cards("2H 3D 4S 5C 9H 9S 9D 9C")
+        step(gs, Discard(card_indices=(0, 1, 2)))
+        assert gs["jokers"][0].ability["extra"]["chips"] == 3 * gained
+    # Burnt Joker levels the hand the discarded cards make under the rules.
+    gs = initialize_run("b_red", 1, "BURNT4")
+    step(gs, SelectBlind())
+    gs["jokers"] = [create_joker("j_burnt"), create_joker("j_four_fingers")]
+    gs["hand"] = _cards("2H 5H 9H KH 3S 9S 9D 9C")
+    step(gs, Discard(card_indices=(0, 1, 2, 3)))
+    assert gs["hand_levels"]["Flush"].level == 2
+
+
+def test_oops_reaches_gros_michel_at_the_end_of_the_round():
+    from jackdaw.engine.jokers import GameSnapshot, on_end_of_round
+    from jackdaw.engine.rng import PseudoRandom
+
+    died = {}
+    for normal in (1, 2, 4, 8):
+        gone = 0
+        for i in range(600):
+            out = on_end_of_round([create_joker("j_gros_michel")],
+                                  GameSnapshot(probabilities_normal=normal),
+                                  PseudoRandom(f"GM{i}"))
+            gone += len(out.get("jokers_removed", []))
+        died[normal] = gone
+    assert died[8] == 600 and died[1] < died[2] < died[4] < 600
+    assert abs(died[1] / 600 - 1 / 6) < 0.05 and abs(died[2] / 600 - 2 / 6) < 0.06

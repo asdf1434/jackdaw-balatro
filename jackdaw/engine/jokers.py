@@ -244,6 +244,16 @@ class JokerContext:
                         skips=skips,
                     ),
                 )
+        # Card:is_suit and Card:is_face ask find_joker for Smeared Joker and
+        # Pareidolia wherever they are called (card.lua:964, 4064), so every
+        # context that names the jokers carries both flags: a discard's
+        # (Faceless Joker, Castle) as much as a hand's.
+        if self.jokers:
+            for flag, name in (("smeared", "Smeared Joker"), ("pareidolia", "Pareidolia")):
+                if not getattr(self, flag) and any(
+                    j.ability.get("name") == name and not j.debuff for j in self.jokers
+                ):
+                    object.__setattr__(self, flag, True)
 
 
 # ---------------------------------------------------------------------------

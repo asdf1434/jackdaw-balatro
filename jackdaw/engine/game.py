@@ -785,7 +785,9 @@ def _handle_discard(gs: dict[str, Any], indices: tuple[int, ...]) -> dict[str, A
             if hand_levels is not None:
                 from jackdaw.engine.hand_eval import evaluate_hand
 
-                det = evaluate_hand(discarded)
+                # card.lua:2751 names the hand with get_poker_hand_info, which
+                # reads Four Fingers, Shortcut and Smeared Joker.
+                det = evaluate_hand(discarded, jokers)
                 if det.detected_hand and det.detected_hand != "NULL":
                     hand_levels.level_up(det.detected_hand)
 
@@ -1615,6 +1617,9 @@ def _round_won(gs: dict[str, Any]) -> None:
         # Delayed Gratification pays only if no discard was used (card.lua:1675).
         discards_used=cr.get("discards_used", 0),
         joker_count=len(jokers),
+        # Gros Michel and Cavendish roll against G.GAME.probabilities.normal
+        # (card.lua:3020), which Oops! All 6s doubles.
+        probabilities_normal=gs.get("probabilities", {}).get("normal", 1),
     )
     _set_dollar_tallies(gs)
     eor = on_end_of_round(jokers, game_snap, rng, blind=blind,
