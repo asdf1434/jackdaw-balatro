@@ -1634,6 +1634,9 @@ def _round_won(gs: dict[str, Any]) -> None:
     for mut in eor.get("mutations", []):
         if mut.get("pool_flag"):
             gs.setdefault("pool_flags", {})[mut["pool_flag"]] = True
+        if mut.get("hand_size_mod"):
+            # Turtle Bean's decay (card.lua:2927).
+            gs["hand_size"] = gs.get("hand_size", 8) + mut["hand_size_mod"]
 
     # ------------------------------------------------------------------
     # 2. Process perishable/rental

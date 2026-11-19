@@ -2587,6 +2587,12 @@ def _turtle_bean(card: Card, ctx: JokerContext) -> JokerResult | None:
     """Turtle Bean: +5 hand size, -1 per round. Self-destructs at 0.
 
     Source: card.lua:2903. Effect is via h_size (passive). Decay in end_of_round.
+
+    The decay also shrinks the hand (card.lua:2927,
+    ``G.hand:change_size(-h_mod)``): the handler cannot reach the game state,
+    so it reports the change and the caller applies it
+    (``game._round_won`` reads ``hand_size_mod``).  Without that the hand kept
+    the full +5 until the joker was eaten, and then lost only the last card.
     """
     if ctx.end_of_round and not ctx.blueprint:
         extra = card.ability.get("extra", {})
@@ -2596,7 +2602,7 @@ def _turtle_bean(card: Card, ctx: JokerContext) -> JokerResult | None:
             return JokerResult(remove=True)
         extra["h_size"] = h_size - h_mod
         card.ability["extra"] = extra
-        return JokerResult()
+        return JokerResult(extra={"hand_size_mod": -h_mod})
     return None
 
 
